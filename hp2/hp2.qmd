@@ -1,0 +1,168 @@
+---
+title: "hp2"
+author: "Brandon Goh"
+format: html
+embed-resources: true
+---
+# Introduction
+
+This report provides an analysis of restaurant reviews collected from the Foodpanda delivery app in Singapore. The data was collected from Mar 17, 2023 to Mar 17, 2024. The purpose of this analysis is to explore customer feedback and rating patterns, which can offer insights into dining preferences and service quality across different types of cuisine. There will be different types of analysis including plots to help visualize some patterns which will aid in answering the questions we are looking into. 
+
+```{r, include=FALSE}
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(dplyr)
+library(kableExtra)
+library(stringr)
+```
+
+```{r, include=FALSE}
+here::i_am("hp2/hp2.qmd")
+library(here)
+restaurants <- read.csv(here("hp2/archive/restaurant.csv/sg_restos.csv"))
+reviews <- read.csv(here("hp2/archive/reviews.csv/sg_reviews.csv"))
+merged <- restaurants %>%
+  inner_join(reviews, by = "StoreId")
+```
+
+# Data Dictionary
+
+Here is a table describing the different variables in the dataset and what they mean.
+```{r, echo=FALSE}
+data_dictionary <- tibble::tribble(
+  ~Variable,           ~Description,
+  "StoreId",           "Unique identifier for each store or restaurant",
+  "uuid",              "Universally unique identifier for individual reviews",
+  "createdAt",         "Timestamp for when the review or entry was created",
+  "updatedAt",         "Timestamp for when the review or entry was last updated",
+  "text",              "The text content of the review",
+  "isAnonymous",       "Flag indicating whether the review was posted anonymously",
+  "reviewerId",        "Unique identifier for the reviewer",
+  "replies",           "Number of replies to the review, if applicable",
+  "likeCount",         "The number of likes a review has received",
+  "isLiked",           "Indicator of whether the user likes the restaurant or food item",
+  "overall",           "Overall rating given by the reviewer",
+  "restaurant_food",   "Rating for the food provided by the restaurant",
+  "rider",             "Rating for the delivery rider",
+  "CompleteStoreName", "The full name of the store or restaurant",
+  "FoodType",          "Type of food the restaurant serves",
+  "AverageRating",     "Average rating of the restaurant",
+  "Reviewers",         "The number of reviewers for the restaurant",
+  "City",              "City in which the restaurant is located",
+  "Location",          "Specific location or address of the restaurant"
+)
+
+kable(data_dictionary, format = "html") %>%
+  kable_styling(full_width = F) %>%
+  column_spec(1, bold = TRUE)
+```
+
+# Analysis
+
+The first question we want to answer in our analysis is How do average restaurant ratings compare across different types of cuisines? We can answer this by plotting all the food types on Foodpanda and the average ratings given by reviewers and rank them in order of the highest average rating out of 5. This will tell us what cuisines are preferred by Singaporeans overall. 
+
+The bar chart below displays the average ratings of restaurants across different cuisine types. It shows that certain cuisines tend to have higher average ratings, which could indicate a higher customer satisfaction level within those food categories. 
+```{r}
+average_ratings <- merged %>%
+  group_by(FoodType) %>%
+  summarise(AverageRating = mean(AverageRating, na.rm = TRUE))
+
+ggplot(average_ratings, aes(x = reorder(FoodType, +AverageRating), y = AverageRating, fill = FoodType)) +
+  coord_flip() +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Cuisine Type", y = "Average Rating") +
+  theme(legend.position = "none", axis.text.y = element_text(size = 4, angle = 0, hjust = 1))
+```
+Next we want to look into the sentiment of the words used in reviews and pose the question: Can we analyze the sentiment of the review texts to gauge customer satisfaction? We can investigate this by plotting the distribution of reviews with the number of reviews with a particular sentiment score.
+
+The histogram shows the sentiment distribution of the review texts. A sentiment score close to zero typically indicates neutral sentiment, while scores farther from zero represent more extreme sentiments. Most reviews cluster around a neutral to slightly positive sentiment, suggesting that most customers have a moderate level of satisfaction with their food delivery experiences.
+```{r, warning=FALSE}
+bing <- get_sentiments("bing")
+
+review_sentiment <- merged %>%
+  unnest_tokens(word, text) %>%
+  inner_join(bing, by = "word") %>%
+  group_by(uuid) %>%
+  summarise(sentiment = sum(restaurant_food), .groups = 'drop')
+
+ggplot(review_sentiment, aes(x = sentiment)) +
+  geom_histogram(bins = 40) +
+  labs(title = "Sentiment Distribution of Reviews", x = "Sentiment Score", y = "Count") +
+   xlim(NA, 40)
+```
+
+Given that the review data has been collected over the past year we want to investigate How have review counts and ratings evolved over time? This will help us understand the activity over the past year in terms of reviews and also give us some insight into the ordering paterns over the past year as greater reviews on average indicate more orders during that period. 
+
+This visualization demonstrates how review counts and average ratings have evolved over time. Peaks in review counts may align with promotional events or holidays, which are periods of increased activity. The plot also reveal trends in customer satisfaction over time as reflected by changes in average ratings. We can see from the plot that reviews increased steadily from March 2023 and peaked December 2023 and slowly declined until March 2024. This might be explained by the holiday season where there is higher demand for food delivery and the increased usage of the app contributes to more reviews for the restaurants.
+```{r}
+reviews$createdAt <- as.Date(reviews$createdAt)
+
+review_patterns <- reviews %>%
+  group_by(Month = floor_date(createdAt, "month")) %>%
+  summarise(AverageRating = mean(overall, na.rm = TRUE),
+            Count = n())
+
+ggplot(review_patterns, aes(x = Month)) +
+  geom_line(aes(y = AverageRating), color = "blue") +
+  geom_bar(aes(y = Count), stat = "identity", fill = "gray", alpha = 0.5) +
+  labs(title = "Review Patterns Over Time", x = "Month", y = "Average Rating / Count")
+```
+Another relationship we want to explore, is there a correlation between the number of reviews a restaurant has and its average rating? We can plot the number of reviews a restaurant receives and its average rating. This will tell us if a restaurant has more reviews does it receive a higher rating on average. 
+
+The scatter plot with a fitted line suggests whether there is a relationship between the number of reviewers and the average ratings of restaurants. A positive correlation might imply that restaurants with more reviews tend to have higher ratings, possibly due to better quality or service leading to more customer engagement. We can see from the scatter plot that there is a slight positive correlation between the number of reviews a restaurant receives and its average rating. 
+```{r}
+merged$Reviewers <- gsub("[^0-9\\+]", "", merged$Reviewers)
+merged$Reviewers <- ifelse(grepl("\\+", merged$Reviewers), 100, as.numeric(merged$Reviewers))
+
+correlation_plot <- merged %>%
+  filter(!is.na(Reviewers)) %>%
+  ggplot(aes(x = Reviewers, y = AverageRating)) +
+  coord_flip() +
+  geom_point(alpha = 0.6) + 
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  labs(title = "Correlation Between Number of Reviews and Average Ratings",
+       x = "Number of Reviews",
+       y = "Average Rating") +
+  theme_minimal()
+
+print(correlation_plot)
+```
+# TF-IDF Analysis
+
+tf-idf stands for term frequency–inverse document frequency and measures the relevance of a word to a document. A word with a higher tf-idf is more characteristic for that document. The bar chart illustrates the top words that are characteristic of the restaurant reviews based on their tf-idf scores. Words with high tf-idf scores are more important in the context of a particular restaurant and are less common across other restaurants, highlighting unique attributes or dishes associated with specific eateries. We can see that there are certain words that have high relevance to a certain review for a restaurant. Many of the words with the highest scores tend to refer to ingredients or dishes that make them unique to that restaurant but are not high in frequency across all reviews.
+
+```{r}
+merged$text <- str_replace_all(merged$text, "[^\\x00-\\x7F]", "")
+
+reviews_tidy <- merged %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "^[a-zA-Z]+(-[a-zA-Z]+)?$")) %>%
+  anti_join(stop_words, by = "word")
+
+reviews_freq <- reviews_tidy %>%
+  group_by(CompleteStoreName) %>%
+  count(word, sort = TRUE)
+
+reviews_idf <- reviews_freq %>%
+  bind_tf_idf(word, CompleteStoreName, n)
+
+top_words <- reviews_idf %>%
+  arrange(desc(tf_idf))
+```
+
+```{r}
+ggplot(top_words[1:20, ], aes(x = reorder(word, +tf_idf), y = tf_idf, fill = CompleteStoreName)) +
+  geom_bar(stat = "identity") +
+  xlab("Word") +
+  ylab("tf_idf") +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  ggtitle("Top 20 TF-IDF Scores Across All Restaurants")
+```
+
+# Conclusion
+
+In summary, the analysis of Foodpanda reviews has provided insights into customer preferences across different cuisines and restaurants in Singapore. The sentiment analysis indicates a generally positive reception from customers and the tf-idf analysis identified key terms that stand out in customer feedback. The observed trends and correlations form a pattern of customer behavior and can guide restaurants in improving their service quality and addressing specific customer needs.
